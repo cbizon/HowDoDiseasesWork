@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Disease Enrichment Visualization - Test</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        pre {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        .test-result {
+            margin: 10px 0;
+            padding: 10px;
+            border-left: 4px solid #007bff;
+            background: #f8f9fa;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧬 Disease Enrichment Visualization - System Test</h1>
+
+        <div class="info">
+            <h3>Quick Test Instructions</h3>
+            <ol>
+                <li>Make sure the Flask backend is running at <code>http://localhost:5000</code></li>
+                <li>Click the test buttons below to verify API connectivity</li>
+                <li>If tests pass, open the full web app at <code>frontend/index.html</code></li>
+            </ol>
+        </div>
+
+        <h2>API Connectivity Tests</h2>
+
+        <button onclick="testApiStatus()">Test API Status</button>
+        <button onclick="testDiseaseSearch()">Test Disease Search</button>
+        <button onclick="testEnrichmentData()">Test Enrichment Data</button>
+        <button onclick="testFullWorkflow()">Test Full Workflow</button>
+
+        <div id="testResults"></div>
+
+        <h2>Sample Diseases to Try</h2>
+        <div class="info">
+            <ul>
+                <li><strong>Huntington Disease</strong>: MONDO:0007739 (34 genes)</li>
+                <li><strong>Ebola hemorrhagic fever</strong>: MONDO:0005737 (4 genes)</li>
+                <li><strong>Type 2 diabetes</strong>: Search "diabetes"</li>
+                <li><strong>Alzheimer disease</strong>: Search "alzheimer"</li>
+                <li><strong>COVID-19</strong>: Search "covid"</li>
+            </ul>
+        </div>
+
+        <h2>Web App Links</h2>
+        <div class="status info">
+            <p><strong>Full Web Application</strong>: <a href="frontend/index.html" target="_blank">Open Web App</a></p>
+            <p><strong>API Documentation</strong>: <a href="http://localhost:5000" target="_blank">API Root</a></p>
+            <p><strong>Database Stats</strong>: <a href="http://localhost:5000/api/stats" target="_blank">View Stats</a></p>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+        const resultsDiv = document.getElementById('testResults');
+
+        function addResult(title, success, message, data = null) {
+            const div = document.createElement('div');
+            div.className = 'test-result';
+
+            const status = success ? '✅' : '❌';
+            div.innerHTML = `
+                <h4>${status} ${title}</h4>
+                <p>${message}</p>
+                ${data ? `<pre>${JSON.stringify(data, null, 2)}</pre>` : ''}
+            `;
+
+            resultsDiv.appendChild(div);
+        }
+
+        async function testApiStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/stats`);
+                const data = await response.json();
+
+                if (response.ok) {
+                    addResult(
+                        'API Status',
+                        true,
+                        `API is running! Database contains ${data.diseases?.toLocaleString()} diseases and ${data.go_terms?.toLocaleString()} GO terms.`,
+                        data
+                    );
+                } else {
+                    addResult('API Status', false, 'API returned an error', data);
+                }
+            } catch (error) {
+                addResult('API Status', false, `Failed to connect to API: ${error.message}`);
+            }
+        }
+
+        async function testDiseaseSearch() {
+            try {
+                const response = await fetch(`${API_BASE}/search?q=huntington`);
+                const data = await response.json();
+
+                if (response.ok && data.results && data.results.length > 0) {
+                    addResult(
+                        'Disease Search',
+                        true,
+                        `Found ${data.count} diseases matching "huntington"`,
+                        data.results.slice(0, 3) // Show first 3 results
+                    );
+                } else {
+                    addResult('Disease Search', false, 'No search results found', data);
+                }
+            } catch (error) {
+                addResult('Disease Search', false, `Search failed: ${error.message}`);
+            }
+        }
+
+        async function testEnrichmentData() {
+            try {
+                const response = await fetch(`${API_BASE}/disease/MONDO:0007739/enrichment?p_threshold=1e-4&include_hierarchy=false`);
+                const data = await response.json();
+
+                if (response.ok && data.enrichment_terms && data.enrichment_terms.length > 0) {
+                    addResult(
+                        'Enrichment Data',
+                        true,
+                        `Loaded enrichment data for Huntington Disease: ${data.enrichment_terms.length} significant terms (p < 1e-4)`,
+                        {
+                            disease: data.disease,
+                            parameters: data.parameters,
+                            sample_terms: data.enrichment_terms.slice(0, 3)
+                        }
+                    );
+                } else {
+                    addResult('Enrichment Data', false, 'No enrichment data found', data);
+                }
+            } catch (error) {
+                addResult('Enrichment Data', false, `Enrichment test failed: ${error.message}`);
+            }
+        }
+
+        async function testFullWorkflow() {
+            addResult('Full Workflow', true, 'Starting comprehensive test...', null);
+
+            // Test 1: Search
+            try {
+                const searchResponse = await fetch(`${API_BASE}/search?q=ebola`);
+                const searchData = await searchResponse.json();
+
+                if (!searchResponse.ok || !searchData.results || searchData.results.length === 0) {
+                    addResult('Full Workflow - Search', false, 'Search step failed');
+                    return;
+                }
+
+                const disease = searchData.results[0];
+                addResult('Full Workflow - Search', true, `Found disease: ${disease.name} (${disease.mondo_id})`);
+
+                // Test 2: Get enrichment with hierarchy
+                const enrichResponse = await fetch(`${API_BASE}/disease/${disease.mondo_id}/enrichment?p_threshold=1e-3&include_hierarchy=true`);
+                const enrichData = await enrichResponse.json();
+
+                if (!enrichResponse.ok) {
+                    addResult('Full Workflow - Enrichment', false, 'Enrichment step failed', enrichData);
+                    return;
+                }
+
+                const hasHierarchy = enrichData.hierarchy && enrichData.hierarchy.terms && enrichData.hierarchy.relationships;
+
+                addResult(
+                    'Full Workflow - Complete',
+                    true,
+                    `✅ Full workflow successful!
+                    - Disease: ${enrichData.disease.name}
+                    - Enrichment terms: ${enrichData.enrichment_terms?.length || 0}
+                    - Network nodes: ${enrichData.hierarchy?.total_terms || 0}
+                    - Network edges: ${enrichData.hierarchy?.relationships?.length || 0}
+                    ${hasHierarchy ? '- Hierarchy data: Available' : '- Hierarchy data: Missing'}`,
+                    {
+                        workflow_summary: {
+                            disease_found: !!disease,
+                            enrichment_loaded: !!enrichData.enrichment_terms,
+                            hierarchy_loaded: hasHierarchy,
+                            ready_for_visualization: hasHierarchy && enrichData.enrichment_terms?.length > 0
+                        }
+                    }
+                );
+
+            } catch (error) {
+                addResult('Full Workflow', false, `Workflow failed: ${error.message}`);
+            }
+        }
+
+        // Run initial API test when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(testApiStatus, 1000);
+        });
+    </script>
+</body>
+</html>

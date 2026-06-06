@@ -1,0 +1,26 @@
+[translator_kgx]
+name = "translator_kg"
+release = "2026_04_22"
+base_url = "https://kgx-storage.rtx.ai/releases/translator_kg/latest/"
+archive_url = "https://kgx-storage.rtx.ai/releases/translator_kg/latest/translator_kg.tar.zst"
+nodes_url = "https://kgx-storage.rtx.ai/releases/translator_kg/latest/nodes.jsonl"
+edges_url = "https://kgx-storage.rtx.ai/releases/translator_kg/latest/edges.jsonl"
+metadata_url = "https://kgx-storage.rtx.ai/releases/translator_kg/latest/graph-metadata.json"
+biolink_version = "4.3.6"
+babel_version = "2025sep1"
+
+[answer_coalesce]
+environment = "ci"
+base_url = "https://answer-coalesce.ci.transltr.io/"
+query_url = "https://answer-coalesce.ci.transltr.io/query"
+openapi_url = "https://answer-coalesce.ci.transltr.io/openapi.json"
+trapi_version = "1.5.0"
+infores = "infores:answer-coalesce"
+
+[analysis]
+min_genes = 3
+categories = [
+    "biolink:BiologicalProcess",
+    "biolink:MolecularActivity",
+    "biolink:Pathway",
+]
