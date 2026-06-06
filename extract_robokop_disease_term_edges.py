@@ -7,8 +7,8 @@ to extract ALL direct edges between diseases and BiologicalProcess/MolecularActi
 Process:
 1. Parse nodes.jsonl to identify diseases and BP/MA/Pathway terms
 2. Parse edges.jsonl to find direct disease-term connections (both directions)
-3. Build comprehensive disease-term edge list from the knowledge graph
-4. Export results in JSONL and TSV formats
+3. Stream the comprehensive disease-term edge list from the knowledge graph
+4. Export results in streamed JSONL and TSV formats
 
 This gives us the full set of disease-mechanism relationships from ROBOKOP KG.
 """
@@ -45,7 +45,7 @@ class ROBOKOPDiseaseTermExtractor:
         self.terms = {}     # curie -> node info (BP/MA/Pathway)
         self.disease_subclass_edges = []  # List of disease subclass relationships
         self.direct_edges = []     # List of direct disease-term edges
-        self.edges = []     # List of all disease-term edges (direct + inferred)
+        self.summary = None
 
         # Target categories
         self.target_categories = {
@@ -218,21 +218,27 @@ class ROBOKOPDiseaseTermExtractor:
 
         return parent_to_subclasses
 
-    def infer_subclass_edges(self) -> None:
+    def iter_edges(self, include_inferred: bool = True):
         """
-        Infer disease-term edges from subclass hierarchy
+        Iterate over direct and optionally subclass-inferred disease-term edges.
+
         If parent_disease related_to term AND child_disease subclass_of parent_disease,
         then infer child_disease related_to term
 
         Since ROBOKOP already computed transitive closure, we just propagate down the hierarchy
         """
-        logger.info("Inferring disease-term edges from subclass hierarchy...")
+        logger.info(f"Yielding {len(self.direct_edges):,} direct disease-term edges...")
+        yield from self.direct_edges
+
+        if not include_inferred:
+            logger.info("Skipping subclass inference.")
+            return
+
+        logger.info("Streaming inferred disease-term edges from subclass hierarchy...")
 
         # Build subclass mapping: parent -> set of all subclasses
         parent_to_subclasses = self.build_subclass_mapping()
 
-        # Start with direct edges
-        self.edges = self.direct_edges.copy()
         inferred_edges_count = 0
 
         # Track existing edges to avoid duplicates
@@ -268,64 +274,88 @@ class ROBOKOPDiseaseTermExtractor:
                             'original_disease_name': direct_edge['source_name']
                         }
 
-                        self.edges.append(inferred_edge)
                         existing_edges.add(edge_key)
                         inferred_edges_count += 1
+                        yield inferred_edge
 
-        total_edges = len(self.edges)
         direct_edges = len(self.direct_edges)
 
-        logger.info(f"Inference complete!")
+        logger.info("Inference complete!")
         logger.info(f"Direct edges: {direct_edges:,}")
         logger.info(f"Inferred edges: {inferred_edges_count:,}")
-        logger.info(f"Total edges (direct + inferred): {total_edges:,}")
+        logger.info(f"Total edges (direct + inferred): {direct_edges + inferred_edges_count:,}")
 
-    def save_edges_jsonl(self, output_file: str) -> None:
+    def save_outputs(self, output_prefix: str, include_inferred: bool = True) -> None:
         """
-        Save edges in JSONL format
+        Save JSONL, TSV, and summary outputs in a single streaming pass.
 
         Args:
-            output_file: Output JSONL filename
+            output_prefix: Output file prefix
+            include_inferred: Whether to include subclass-inferred edges
         """
-        logger.info(f"Saving {len(self.edges):,} edges to {output_file}...")
+        jsonl_file = f"{output_prefix}.jsonl"
+        tsv_file = f"{output_prefix}.tsv"
+        summary_file = f"{output_prefix}_summary.tsv"
 
-        with open(output_file, 'w') as f:
-            for edge in self.edges:
-                f.write(json.dumps(edge) + '\n')
+        logger.info(f"Saving disease-term edges to {jsonl_file} and {tsv_file}...")
 
-        logger.info(f"Edges saved to {output_file}")
+        category_stats = defaultdict(lambda: {
+            'edge_count': 0,
+            'unique_diseases': set(),
+            'unique_terms': set(),
+            'predicates': defaultdict(int)
+        })
+        direction_counts = defaultdict(int)
+        predicate_counts = defaultdict(int)
+        sample_edges = []
+        total_edges = 0
 
-    def save_edges_tsv(self, output_file: str) -> None:
-        """
-        Save edges in TSV format for easy analysis
-
-        Args:
-            output_file: Output TSV filename
-        """
-        logger.info(f"Saving edges to TSV format: {output_file}...")
-
-        with open(output_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f, delimiter='\t')
-
+        with (
+            open(jsonl_file, 'w', encoding='utf-8') as jsonl_out,
+            open(tsv_file, 'w', newline='', encoding='utf-8') as tsv_out,
+        ):
+            writer = csv.writer(tsv_out, delimiter='\t')
             # Header
             writer.writerow([
                 'source_curie', 'source_name', 'source_type',
                 'target_curie', 'target_name', 'target_type',
-                'predicate', 'direction'
+                'predicate', 'direction', 'inference_type'
             ])
 
-            # Sort edges by source disease for better organization
-            sorted_edges = sorted(self.edges, key=lambda x: (x['source_name'], x['target_type'], x['target_name']))
+            for edge in self.iter_edges(include_inferred=include_inferred):
+                total_edges += 1
+                if total_edges % 500000 == 0:
+                    logger.info(f"Wrote {total_edges:,} disease-term edges...")
 
-            # Data rows
-            for edge in sorted_edges:
+                jsonl_out.write(json.dumps(edge) + '\n')
                 writer.writerow([
                     edge['source_curie'], edge['source_name'], edge['source_type'],
                     edge['target_curie'], edge['target_name'], edge['target_type'],
-                    edge['predicate'], edge['direction']
+                    edge['predicate'], edge['direction'], edge['inference_type']
                 ])
 
-        logger.info(f"Edges saved to TSV format: {output_file}")
+                category = edge['target_type']
+                category_stats[category]['edge_count'] += 1
+                category_stats[category]['unique_diseases'].add(edge['source_curie'])
+                category_stats[category]['unique_terms'].add(edge['target_curie'])
+                category_stats[category]['predicates'][edge['predicate']] += 1
+                direction_counts[edge['direction']] += 1
+                predicate_counts[edge['predicate']] += 1
+
+                if len(sample_edges) < 5:
+                    sample_edges.append(edge)
+
+        self.summary = {
+            'total_edges': total_edges,
+            'category_stats': category_stats,
+            'direction_counts': direction_counts,
+            'predicate_counts': predicate_counts,
+            'sample_edges': sample_edges,
+        }
+
+        self.generate_summary_stats(summary_file)
+        logger.info(f"Edges saved to {jsonl_file}")
+        logger.info(f"Edges saved to TSV format: {tsv_file}")
 
     def generate_summary_stats(self, output_file: str) -> None:
         """
@@ -336,20 +366,10 @@ class ROBOKOPDiseaseTermExtractor:
         """
         logger.info(f"Generating summary statistics...")
 
-        # Calculate statistics by category
-        category_stats = defaultdict(lambda: {
-            'edge_count': 0,
-            'unique_diseases': set(),
-            'unique_terms': set(),
-            'predicates': defaultdict(int)
-        })
+        if not self.summary:
+            raise RuntimeError("No summary data available. Call save_outputs() first.")
 
-        for edge in self.edges:
-            category = edge['target_type']
-            category_stats[category]['edge_count'] += 1
-            category_stats[category]['unique_diseases'].add(edge['source_curie'])
-            category_stats[category]['unique_terms'].add(edge['target_curie'])
-            category_stats[category]['predicates'][edge['predicate']] += 1
+        category_stats = self.summary['category_stats']
 
         # Write summary
         with open(output_file, 'w', newline='', encoding='utf-8') as f:
@@ -385,50 +405,47 @@ class ROBOKOPDiseaseTermExtractor:
 
     def print_summary(self) -> None:
         """Print summary statistics to console"""
+        if not self.summary:
+            raise RuntimeError("No summary data available. Call save_outputs() first.")
+
+        total_edges = self.summary['total_edges']
+        category_stats = self.summary['category_stats']
+        direction_counts = self.summary['direction_counts']
+        predicate_counts = self.summary['predicate_counts']
+        sample_edges = self.summary['sample_edges']
+
         print(f"\\n=== ROBOKOP Disease-Term Edge Extraction Summary ===")
-        print(f"Total edges extracted: {len(self.edges):,}")
+        print(f"Total edges extracted: {total_edges:,}")
 
         # Count unique diseases and terms
-        unique_diseases = len(set(e['source_curie'] for e in self.edges))
-        unique_terms = len(set(e['target_curie'] for e in self.edges))
+        unique_diseases = len(set().union(*(stats['unique_diseases'] for stats in category_stats.values())))
+        unique_terms = len(set().union(*(stats['unique_terms'] for stats in category_stats.values())))
         print(f"Unique diseases with term connections: {unique_diseases:,}")
         print(f"Unique terms connected to diseases: {unique_terms:,}")
 
         # Category breakdown
-        category_counts = defaultdict(int)
-        for edge in self.edges:
-            category_counts[edge['target_type']] += 1
-
         print(f"\\nEdges by category:")
         for category in sorted(self.target_categories):
-            count = category_counts[category]
-            pct = (count / len(self.edges)) * 100 if self.edges else 0
+            count = category_stats[category]['edge_count']
+            pct = (count / total_edges) * 100 if total_edges else 0
             print(f"  {category}: {count:,} ({pct:.1f}%)")
 
         # Direction breakdown
-        direction_counts = defaultdict(int)
-        for edge in self.edges:
-            direction_counts[edge['direction']] += 1
-
         print(f"\\nEdges by direction:")
         for direction, count in direction_counts.items():
-            pct = (count / len(self.edges)) * 100 if self.edges else 0
+            pct = (count / total_edges) * 100 if total_edges else 0
             print(f"  {direction}: {count:,} ({pct:.1f}%)")
 
         # Top predicates
-        predicate_counts = defaultdict(int)
-        for edge in self.edges:
-            predicate_counts[edge['predicate']] += 1
-
         top_predicates = sorted(predicate_counts.items(), key=lambda x: x[1], reverse=True)[:10]
         print(f"\\nTop 10 predicates:")
         for predicate, count in top_predicates:
-            pct = (count / len(self.edges)) * 100 if self.edges else 0
+            pct = (count / total_edges) * 100 if total_edges else 0
             print(f"  {predicate}: {count:,} ({pct:.1f}%)")
 
         # Sample edges
         print(f"\\nSample edges:")
-        for i, edge in enumerate(self.edges[:5]):
+        for i, edge in enumerate(sample_edges):
             print(f"  {edge['source_name']} --{edge['predicate']}--> {edge['target_name']} ({edge['target_type']})")
 
     def run_extraction(self) -> None:
@@ -444,9 +461,6 @@ class ROBOKOPDiseaseTermExtractor:
         # Step 2: Parse edges to find disease-term connections and subclass relationships
         self.parse_edges()
 
-        # Step 3: Infer additional edges from subclass hierarchy
-        self.infer_subclass_edges()
-
         elapsed = time.time() - start_time
         logger.info(f"Extraction complete in {elapsed:.1f} seconds!")
 
@@ -458,6 +472,8 @@ def main():
                        help='Directory containing ROBOKOP graph files (default: /Users/bizon/Projects/ROBOKOP/graph)')
     parser.add_argument('--output-prefix', '-o', default='robokop_disease_term_edges',
                        help='Output file prefix (default: robokop_disease_term_edges)')
+    parser.add_argument('--direct-only', action='store_true',
+                       help='Only write direct disease-term edges; skip subclass inference')
 
     args = parser.parse_args()
 
@@ -468,9 +484,7 @@ def main():
     extractor.run_extraction()
 
     # Save results in multiple formats
-    extractor.save_edges_jsonl(f"{args.output_prefix}.jsonl")
-    extractor.save_edges_tsv(f"{args.output_prefix}.tsv")
-    extractor.generate_summary_stats(f"{args.output_prefix}_summary.tsv")
+    extractor.save_outputs(args.output_prefix, include_inferred=not args.direct_only)
 
     # Print summary
     extractor.print_summary()
@@ -478,7 +492,7 @@ def main():
     print(f"\\nROBOKOP disease-term edge extraction complete!")
     print(f"Files created:")
     print(f"  {args.output_prefix}.jsonl - All edges in JSONL format")
-    print(f"  {args.output_prefix}.tsv - All edges in TSV format (sorted by disease)")
+    print(f"  {args.output_prefix}.tsv - All edges in streamed TSV format")
     print(f"  {args.output_prefix}_summary.tsv - Summary statistics by category")
 
 if __name__ == "__main__":

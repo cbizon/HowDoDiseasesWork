@@ -73,6 +73,10 @@ uv run python extract_robokop_disease_term_edges.py \
   --output-prefix artifacts/runs/translator-ci-YYYY-MM-DD/translator_disease_term_edges
 ```
 
+The ground-truth extractor streams JSONL/TSV outputs so it does not have to
+materialize the full subclass-inferred edge set in memory. Use `--direct-only`
+for a direct-edge-only diagnostic run.
+
 Evaluate:
 
 ```bash
