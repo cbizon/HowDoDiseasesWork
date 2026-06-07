@@ -34,14 +34,13 @@
         }
 
         .node.original {
-            stroke: #45b7d1;
             stroke-width: 3px;
         }
 
         .link {
-            stroke: #999;
-            stroke-opacity: 0.6;
-            stroke-width: 1px;
+            stroke: #666;
+            stroke-opacity: 0.7;
+            stroke-width: 1.4px;
         }
 
         .node-label {
@@ -176,7 +175,7 @@
                 <div class="legend">
                     <h6>Legend</h6>
                     <div class="legend-item">
-                        <div class="legend-color" style="background: #ffeb3b; border-color: #45b7d1;"></div>
+                        <div class="legend-color" style="background: #ffeb3b; border-color: #777;"></div>
                         <span>Original Enrichment Terms</span>
                     </div>
                     <div class="legend-item">
@@ -185,10 +184,11 @@
                     </div>
                     <div class="legend-item">
                         <div class="legend-color" style="background: #f8f8f8; border-color: #4ecdc4;"></div>
-                        <span>Ancestor Terms (Added for Context)</span>
+                        <span>Parent or Ancestor Terms</span>
                     </div>
                     <small class="text-muted">
                         <strong>Enrichment Leaves:</strong> Significant terms with no significant children<br>
+                        <strong>Edges:</strong> Arrows point from child to parent<br>
                         <strong>Node size:</strong> -log10(p-value) - larger = more significant<br>
                         <strong>Hover:</strong> See full term details
                     </small>

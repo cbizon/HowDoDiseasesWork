@@ -60,6 +60,8 @@ class DiseaseEnrichmentViz {
             .attr('viewBox', `0 0 ${this.width} ${this.height}`)
             .style('background', '#fafafa');
 
+        this.defineArrowMarkers();
+
         // Add zoom behavior
         const zoom = d3.zoom()
             .scaleExtent([0.1, 4])
@@ -72,6 +74,23 @@ class DiseaseEnrichmentViz {
 
         // Create zoom group for all content
         this.svg.append('g').attr('class', 'zoom-group');
+    }
+
+    defineArrowMarkers() {
+        const defs = this.svg.append('defs');
+
+        defs.append('marker')
+            .attr('id', 'child-to-parent-arrow')
+            .attr('viewBox', '0 -5 10 10')
+            .attr('refX', 10)
+            .attr('refY', 0)
+            .attr('markerWidth', 7)
+            .attr('markerHeight', 7)
+            .attr('orient', 'auto')
+            .attr('markerUnits', 'strokeWidth')
+            .append('path')
+            .attr('d', 'M0,-5L10,0L0,5')
+            .attr('fill', '#666');
     }
 
     async searchDiseases(query) {
@@ -335,7 +354,8 @@ class DiseaseEnrichmentViz {
             .selectAll('line')
             .data(links)
             .enter().append('line')
-            .attr('class', 'link');
+            .attr('class', 'link')
+            .attr('marker-end', 'url(#child-to-parent-arrow)');
     }
 
     createForceLayout(nodes, links) {
@@ -355,7 +375,8 @@ class DiseaseEnrichmentViz {
             .data(links)
             .enter()
             .append('line')
-            .attr('class', 'link');
+            .attr('class', 'link')
+            .attr('marker-end', 'url(#child-to-parent-arrow)');
 
         console.log(`Created ${link.size()} link elements`);
 
@@ -375,13 +396,7 @@ class DiseaseEnrichmentViz {
             .attr('r', d => d.radius)
             .attr('fill', d => this.getNodeColor(d))
             .attr('stroke', d => this.getNodeBorderColor(d))
-            .attr('class', d => {
-                let classes = 'node';
-                if (d.is_enrichment_leaf) classes += ' leaf';
-                if (!d.is_enrichment_leaf && !d.is_original) classes += ' internal';
-                if (d.is_original) classes += ' original';
-                return classes;
-            })
+            .attr('class', d => this.getNodeClass(d))
             .on('mouseover', (event, d) => this.showTooltip(event, d))
             .on('mousemove', (event, d) => this.updateTooltipPosition(event))
             .on('mouseout', () => this.hideTooltip());
@@ -400,10 +415,10 @@ class DiseaseEnrichmentViz {
         // Set up the simulation tick handler
         this.simulation.on('tick', () => {
             link
-                .attr('x1', d => d.source.x)
-                .attr('y1', d => d.source.y)
-                .attr('x2', d => d.target.x)
-                .attr('y2', d => d.target.y);
+                .attr('x1', d => this.getLinkEndpoint(d.source, d.target, d.source.radius).x)
+                .attr('y1', d => this.getLinkEndpoint(d.source, d.target, d.source.radius).y)
+                .attr('x2', d => this.getLinkEndpoint(d.target, d.source, d.target.radius + 4).x)
+                .attr('y2', d => this.getLinkEndpoint(d.target, d.source, d.target.radius + 4).y);
 
             nodeGroup
                 .attr('transform', d => `translate(${d.x},${d.y})`);
@@ -423,10 +438,10 @@ class DiseaseEnrichmentViz {
         // Also stop on low alpha (when simulation has mostly settled)
         this.simulation.on('tick', () => {
             link
-                .attr('x1', d => d.source.x)
-                .attr('y1', d => d.source.y)
-                .attr('x2', d => d.target.x)
-                .attr('y2', d => d.target.y);
+                .attr('x1', d => this.getLinkEndpoint(d.source, d.target, d.source.radius).x)
+                .attr('y1', d => this.getLinkEndpoint(d.source, d.target, d.source.radius).y)
+                .attr('x2', d => this.getLinkEndpoint(d.target, d.source, d.target.radius + 4).x)
+                .attr('y2', d => this.getLinkEndpoint(d.target, d.source, d.target.radius + 4).y);
 
             nodeGroup
                 .attr('transform', d => `translate(${d.x},${d.y})`);
@@ -627,6 +642,7 @@ class DiseaseEnrichmentViz {
             .data(treeLinks)
             .enter().append('path')
             .attr('class', 'link')
+            .attr('marker-end', 'url(#child-to-parent-arrow)')
             .attr('d', d3.linkVertical()
                 .x(d => d.x + 50)
                 .y(d => d.y + 50)
@@ -642,10 +658,11 @@ class DiseaseEnrichmentViz {
             .data(links)
             .enter().append('line')
             .attr('class', 'link')
-            .attr('x1', d => d.source.x)
-            .attr('y1', d => d.source.y)
-            .attr('x2', d => d.target.x)
-            .attr('y2', d => d.target.y);
+            .attr('marker-end', 'url(#child-to-parent-arrow)')
+            .attr('x1', d => this.getLinkEndpoint(d.source, d.target, d.source.radius).x)
+            .attr('y1', d => this.getLinkEndpoint(d.source, d.target, d.source.radius).y)
+            .attr('x2', d => this.getLinkEndpoint(d.target, d.source, d.target.radius + 4).x)
+            .attr('y2', d => this.getLinkEndpoint(d.target, d.source, d.target.radius + 4).y);
     }
 
     createSimpleNodes(nodes) {
@@ -662,9 +679,10 @@ class DiseaseEnrichmentViz {
 
         // Add circles
         nodeGroups.append('circle')
-            .attr('class', d => `node ${d.is_enrichment_leaf ? 'leaf' : 'internal'} ${d.is_original ? 'original' : ''}`)
+            .attr('class', d => this.getNodeClass(d))
             .attr('r', d => d.radius)
             .attr('fill', d => this.getNodeColor(d))
+            .attr('stroke', d => this.getNodeBorderColor(d))
             .style('cursor', 'pointer')
             .on('mouseover', (event, d) => this.showTooltip(event, d))
             .on('mouseout', () => this.hideTooltip());
@@ -692,9 +710,10 @@ class DiseaseEnrichmentViz {
 
         // Add circles
         nodeGroups.append('circle')
-            .attr('class', d => `node ${d.data.is_enrichment_leaf ? 'leaf' : 'internal'} ${d.data.is_original ? 'original' : ''}`)
+            .attr('class', d => this.getNodeClass(d.data))
             .attr('r', d => d.data.radius)
             .attr('fill', d => this.getNodeColor(d.data))
+            .attr('stroke', d => this.getNodeBorderColor(d.data))
             .on('mouseover', (event, d) => this.showTooltip(event, d.data))
             .on('mouseout', () => this.hideTooltip());
 
@@ -714,9 +733,31 @@ class DiseaseEnrichmentViz {
 
     getNodeBorderColor(d) {
         if (d.is_root) return '#666666'; // Dark gray for virtual root
-        if (d.is_original) return '#45b7d1'; // Blue for original enrichment terms
         if (d.is_enrichment_leaf) return '#ff6b6b'; // Red for enrichment leaves
         return '#4ecdc4'; // Teal for internal nodes
+    }
+
+    getNodeClass(d) {
+        const classes = ['node'];
+        classes.push(d.is_enrichment_leaf ? 'leaf' : 'internal');
+        if (d.is_original) classes.push('original');
+        if (d.is_root) classes.push('root');
+        return classes.join(' ');
+    }
+
+    getLinkEndpoint(node, otherNode, offset) {
+        const dx = otherNode.x - node.x;
+        const dy = otherNode.y - node.y;
+        const length = Math.sqrt(dx * dx + dy * dy);
+
+        if (!length || !Number.isFinite(length)) {
+            return { x: node.x, y: node.y };
+        }
+
+        return {
+            x: node.x + (dx / length) * offset,
+            y: node.y + (dy / length) * offset
+        };
     }
 
     truncateLabel(text, radius) {
@@ -744,10 +785,10 @@ class DiseaseEnrichmentViz {
 
     updateVisualization() {
         this.svg.selectAll('.link')
-            .attr('x1', d => d.source.x)
-            .attr('y1', d => d.source.y)
-            .attr('x2', d => d.target.x)
-            .attr('y2', d => d.target.y);
+            .attr('x1', d => this.getLinkEndpoint(d.source, d.target, d.source.radius).x)
+            .attr('y1', d => this.getLinkEndpoint(d.source, d.target, d.source.radius).y)
+            .attr('x2', d => this.getLinkEndpoint(d.target, d.source, d.target.radius + 4).x)
+            .attr('y2', d => this.getLinkEndpoint(d.target, d.source, d.target.radius + 4).y);
 
         this.svg.selectAll('.node-group')
             .attr('transform', d => `translate(${d.x},${d.y})`);
@@ -776,7 +817,7 @@ class DiseaseEnrichmentViz {
         }
 
         const nodeType = d.is_enrichment_leaf ? 'Most Specific Finding' :
-                        d.is_original ? 'Enrichment Term' : 'Ancestor Term';
+                        d.is_original ? 'Parent Enrichment Term' : 'Ancestor Term';
         content += `<br><strong>Type:</strong> ${nodeType}`;
 
         tooltip.innerHTML = content;
