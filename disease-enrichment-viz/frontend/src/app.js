@@ -11,9 +11,16 @@ class DiseaseEnrichmentViz {
 
         this.simulation = null;
         this.activeRequestId = 0;
+        this.activeCategoryCountRequestId = 0;
+        this.categories = [
+            { value: 'BiologicalProcess', label: 'Biological Process' },
+            { value: 'MolecularActivity', label: 'Molecular Activity' },
+            { value: 'Pathway', label: 'Pathway' }
+        ];
 
         this.initializeEventListeners();
         this.setupVisualization();
+        this.updateCategoryOptions();
     }
 
     initializeEventListeners() {
@@ -34,9 +41,12 @@ class DiseaseEnrichmentViz {
         });
 
         // Parameter changes
-        document.getElementById('pThreshold').addEventListener('change', () => {
+        document.getElementById('pThreshold').addEventListener('change', async () => {
             if (this.currentDisease) {
-                this.loadEnrichmentData();
+                const hasAvailableCategory = await this.refreshCategoryOptions();
+                if (hasAvailableCategory) {
+                    this.loadEnrichmentData();
+                }
             }
         });
 
@@ -138,22 +148,18 @@ class DiseaseEnrichmentViz {
         document.getElementById('visualizeBtn').disabled = false;
 
         console.log('Selected disease:', this.currentDisease);
+        this.refreshCategoryOptions();
     }
 
     async loadEnrichmentData() {
         if (!this.currentDisease) return;
 
         const requestId = ++this.activeRequestId;
-        const pThresholdText = document.getElementById('pThreshold').value;
         const category = document.getElementById('category').value;
 
-        // Parse p-value threshold
         let pThreshold;
         try {
-            pThreshold = parseFloat(pThresholdText);
-            if (isNaN(pThreshold) || pThreshold <= 0 || pThreshold > 1) {
-                throw new Error('Invalid p-value');
-            }
+            pThreshold = this.getPThreshold();
         } catch (error) {
             this.showError('Please enter a valid p-value (e.g., 1e-5, 0.001, 1e-3)');
             return;
@@ -192,6 +198,122 @@ class DiseaseEnrichmentViz {
                 this.showLoading(false);
             }
         }
+    }
+
+    getPThreshold() {
+        const pThresholdText = document.getElementById('pThreshold').value;
+        const pThreshold = parseFloat(pThresholdText);
+
+        if (isNaN(pThreshold) || pThreshold <= 0 || pThreshold > 1) {
+            throw new Error('Invalid p-value');
+        }
+
+        return pThreshold;
+    }
+
+    async refreshCategoryOptions() {
+        if (!this.currentDisease) {
+            this.updateCategoryOptions();
+            return false;
+        }
+
+        let pThreshold;
+        try {
+            pThreshold = this.getPThreshold();
+        } catch (error) {
+            this.showError('Please enter a valid p-value (e.g., 1e-5, 0.001, 1e-3)');
+            return false;
+        }
+
+        const requestId = ++this.activeCategoryCountRequestId;
+        const select = document.getElementById('category');
+        const visualizeButton = document.getElementById('visualizeBtn');
+        const previousCategory = select.value;
+
+        select.disabled = true;
+        visualizeButton.disabled = true;
+
+        try {
+            const countEntries = await Promise.all(
+                this.categories.map(async category => {
+                    const params = new URLSearchParams({
+                        p_threshold: String(pThreshold),
+                        category: category.value,
+                        include_hierarchy: 'false'
+                    });
+                    const url = `${this.apiBase}/disease/${this.currentDisease.mondo_id}/enrichment?${params.toString()}`;
+                    const response = await fetch(url);
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        throw new Error(data.error || `Failed to load ${category.value} count`);
+                    }
+
+                    return [category.value, data.enrichment_terms?.length || 0];
+                })
+            );
+
+            if (requestId !== this.activeCategoryCountRequestId) {
+                return false;
+            }
+
+            const counts = Object.fromEntries(countEntries);
+            const hasAvailableCategory = this.updateCategoryOptions(counts, previousCategory);
+            select.disabled = !hasAvailableCategory;
+            visualizeButton.disabled = !hasAvailableCategory;
+
+            if (!hasAvailableCategory) {
+                this.clearVisualization();
+                this.displayNetworkStats({ hierarchy: null });
+                this.showError(`No enrichment terms found at p <= ${pThreshold}`);
+            } else {
+                this.hideError();
+            }
+
+            return hasAvailableCategory;
+        } catch (error) {
+            if (requestId !== this.activeCategoryCountRequestId) {
+                return false;
+            }
+
+            console.error('Category count error:', error);
+            this.updateCategoryOptions();
+            select.disabled = false;
+            visualizeButton.disabled = false;
+            this.showError('Failed to load category counts. Please try again.');
+            return false;
+        }
+    }
+
+    updateCategoryOptions(counts = null, preferredCategory = null) {
+        const select = document.getElementById('category');
+        const currentCategory = preferredCategory || select.value;
+        let firstEnabledCategory = null;
+
+        this.categories.forEach(category => {
+            let option = select.querySelector(`option[value="${category.value}"]`);
+            if (!option) {
+                option = document.createElement('option');
+                option.value = category.value;
+                select.appendChild(option);
+            }
+
+            const count = counts ? counts[category.value] || 0 : null;
+            option.textContent = count === null ? category.label : `${category.label} (${count})`;
+            option.disabled = count === 0;
+
+            if (count === null || count > 0) {
+                firstEnabledCategory ||= category.value;
+            }
+        });
+
+        if (firstEnabledCategory) {
+            select.value = counts && (counts[currentCategory] || 0) === 0
+                ? firstEnabledCategory
+                : currentCategory;
+        }
+
+        return Boolean(firstEnabledCategory);
     }
 
     displayDiseaseInfo(disease, parameters) {
