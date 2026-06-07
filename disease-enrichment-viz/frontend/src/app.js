@@ -1004,6 +1004,7 @@ class DiseaseEnrichmentViz {
 
         // Build tooltip content
         let content = `<strong>${d.name || d.id}</strong>`;
+        content += `<br><strong>ID:</strong> ${d.id}`;
 
         if (d.is_original && d.p_value) {
             content += `<br><strong>P-value:</strong> ${d.p_value.toExponential(2)}`;
