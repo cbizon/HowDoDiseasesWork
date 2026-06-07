@@ -4,9 +4,9 @@ from flask import Flask, jsonify, request, send_from_directory, send_file
 from flask_cors import CORS
 import sqlite3
 import json
-from collections import defaultdict, deque
 import logging
 import os
+from pathlib import Path
 
 app = Flask(__name__)
 CORS(app)
@@ -15,12 +15,21 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DATABASE_PATH = 'data/enrichment_database.db'
+APP_DIR = Path(__file__).resolve().parent
+DATABASE_PATH = os.environ.get(
+    "ENRICHMENT_DATABASE_PATH",
+    str(APP_DIR / "data" / "enrichment_database.db"),
+)
+STATS_PATH = os.environ.get(
+    "ENRICHMENT_DATABASE_STATS_PATH",
+    str(APP_DIR / "data" / "database_stats.json"),
+)
 
 class EnrichmentAPI:
     def __init__(self, db_path=DATABASE_PATH):
         self.db_path = db_path
         self.term_names_cache = self.load_term_names_cache()
+        self.schema = self.detect_schema()
 
     def get_connection(self):
         """Get database connection"""
@@ -28,14 +37,43 @@ class EnrichmentAPI:
         conn.row_factory = sqlite3.Row  # Enable dict-like access
         return conn
 
+    def detect_schema(self):
+        """Detect whether the database uses generic term tables or legacy GO tables."""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type IN ('table', 'view')
+                """
+            )
+            names = {row[0] for row in cursor.fetchall()}
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Could not inspect database schema: {e}")
+            return "generic"
+
+        if "terms" in names and "term_hierarchy" in names:
+            return "generic"
+        return "legacy_go"
+
     def get_disease_info(self, mondo_id):
         """Get basic disease information"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        cursor.execute('''
-            SELECT * FROM diseases
-            WHERE mondo_id = ?
+        id_column = "disease_id" if self.schema == "generic" else "mondo_id"
+
+        cursor.execute(f'''
+            SELECT
+                {id_column} AS mondo_id,
+                name,
+                description,
+                gene_count
+            FROM diseases
+            WHERE {id_column} = ?
         ''', (mondo_id,))
 
         result = cursor.fetchone()
@@ -50,15 +88,44 @@ class EnrichmentAPI:
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        cursor.execute('''
-            SELECT e.go_id, e.p_value, e.rank_in_category, g.name, g.is_leaf, g.information_content
-            FROM enrichment_results e
-            JOIN go_terms g ON e.go_id = g.go_id
-            WHERE e.mondo_id = ?
-            AND e.category = ?
-            AND e.p_value <= ?
-            ORDER BY e.p_value ASC
-        ''', (mondo_id, category, p_threshold))
+        if self.schema == "generic":
+            cursor.execute('''
+                SELECT
+                    e.term_id,
+                    e.term_id AS go_id,
+                    e.p_value,
+                    e.rank_in_category,
+                    t.name,
+                    t.category AS term_category,
+                    t.is_leaf,
+                    t.has_hierarchy,
+                    t.information_content
+                FROM enrichment_results e
+                LEFT JOIN terms t ON e.term_id = t.term_id
+                WHERE e.disease_id = ?
+                AND e.category = ?
+                AND e.p_value <= ?
+                ORDER BY e.p_value ASC
+            ''', (mondo_id, category, p_threshold))
+        else:
+            cursor.execute('''
+                SELECT
+                    e.go_id AS term_id,
+                    e.go_id,
+                    e.p_value,
+                    e.rank_in_category,
+                    g.name,
+                    g.category AS term_category,
+                    g.is_leaf,
+                    1 AS has_hierarchy,
+                    g.information_content
+                FROM enrichment_results e
+                JOIN go_terms g ON e.go_id = g.go_id
+                WHERE e.mondo_id = ?
+                AND e.category = ?
+                AND e.p_value <= ?
+                ORDER BY e.p_value ASC
+            ''', (mondo_id, category, p_threshold))
 
         results = cursor.fetchall()
         conn.close()
@@ -66,43 +133,67 @@ class EnrichmentAPI:
         # Fix names using cache if database names are missing
         enrichment_terms = [dict(row) for row in results]
         for term in enrichment_terms:
-            if term['name'] == term['go_id'] and term['go_id'] in self.term_names_cache:
-                term['name'] = self.term_names_cache[term['go_id']]
+            if not term.get('name'):
+                term['name'] = term['term_id']
+            if term['name'] == term['term_id'] and term['term_id'] in self.term_names_cache:
+                term['name'] = self.term_names_cache[term['term_id']]
 
         return enrichment_terms
 
-    def get_hierarchy_subgraph(self, go_terms):
+    def get_hierarchy_subgraph(self, term_ids):
         """Get hierarchy subgraph for ONLY the enrichment terms (no ancestors)"""
-        if not go_terms:
+        if not term_ids:
             return {'terms': [], 'relationships': []}
 
         conn = self.get_connection()
         cursor = conn.cursor()
 
         # Only get information for the enrichment terms themselves
-        placeholders = ','.join(['?' for _ in go_terms])
-        cursor.execute(f'''
-            SELECT go_id, name, is_leaf, information_content
-            FROM go_terms
-            WHERE go_id IN ({placeholders})
-        ''', go_terms)
+        placeholders = ','.join(['?' for _ in term_ids])
+        if self.schema == "generic":
+            cursor.execute(f'''
+                SELECT
+                    term_id,
+                    term_id AS go_id,
+                    name,
+                    category AS term_category,
+                    is_leaf,
+                    has_hierarchy,
+                    information_content
+                FROM terms
+                WHERE term_id IN ({placeholders})
+            ''', term_ids)
+        else:
+            cursor.execute(f'''
+                SELECT
+                    go_id AS term_id,
+                    go_id,
+                    name,
+                    category AS term_category,
+                    is_leaf,
+                    1 AS has_hierarchy,
+                    information_content
+                FROM go_terms
+                WHERE go_id IN ({placeholders})
+            ''', term_ids)
 
-        print(f"Database query returned {cursor.rowcount} rows for {len(go_terms)} terms")
+        print(f"Database query returned {cursor.rowcount} rows for {len(term_ids)} terms")
 
         terms_info = [dict(row) for row in cursor.fetchall()]
 
         # Fix names using cache if database names are missing
         for term in terms_info:
-            if term['name'] == term['go_id'] and term['go_id'] in self.term_names_cache:
-                term['name'] = self.term_names_cache[term['go_id']]
+            if term['name'] == term['term_id'] and term['term_id'] in self.term_names_cache:
+                term['name'] = self.term_names_cache[term['term_id']]
 
         # Get relationships ONLY between enrichment terms (no external ancestors)
+        hierarchy_table = "term_hierarchy" if self.schema == "generic" else "go_hierarchy"
         cursor.execute(f'''
             SELECT child_id, parent_id
-            FROM go_hierarchy
+            FROM {hierarchy_table}
             WHERE child_id IN ({placeholders})
             AND parent_id IN ({placeholders})
-        ''', go_terms + go_terms)
+        ''', term_ids + term_ids)
 
         relationships = [{'child': row[0], 'parent': row[1]} for row in cursor.fetchall()]
 
@@ -111,8 +202,9 @@ class EnrichmentAPI:
         return {
             'terms': terms_info,
             'relationships': relationships,
-            'original_terms': go_terms,
-            'total_terms': len(terms_info)
+            'original_terms': term_ids,
+            'total_terms': len(terms_info),
+            'hierarchy_available': bool(relationships)
         }
 
     def search_diseases(self, query, limit=20):
@@ -121,12 +213,14 @@ class EnrichmentAPI:
         cursor = conn.cursor()
 
         # Search by MONDO ID or name
-        cursor.execute('''
-            SELECT mondo_id, name, gene_count
+        id_column = "disease_id" if self.schema == "generic" else "mondo_id"
+
+        cursor.execute(f'''
+            SELECT {id_column} AS mondo_id, name, gene_count
             FROM diseases
-            WHERE mondo_id LIKE ? OR LOWER(name) LIKE LOWER(?)
+            WHERE {id_column} LIKE ? OR LOWER(name) LIKE LOWER(?)
             ORDER BY
-                CASE WHEN mondo_id = ? THEN 1 ELSE 2 END,
+                CASE WHEN {id_column} = ? THEN 1 ELSE 2 END,
                 CASE WHEN LOWER(name) LIKE LOWER(?) THEN 1 ELSE 2 END,
                 name
             LIMIT ?
@@ -140,13 +234,13 @@ class EnrichmentAPI:
     def load_term_names_cache(self):
         """Load term names from cache file"""
         cache_files = [
-            'data_prep/robokop_term_names_cache.json',
-            '../robokop_term_names_cache.json',
-            '../../robokop_term_names_cache.json'
+            APP_DIR / 'data_prep' / 'robokop_term_names_cache.json',
+            APP_DIR.parent / 'robokop_term_names_cache.json',
+            APP_DIR.parent.parent / 'robokop_term_names_cache.json',
         ]
 
         for cache_file in cache_files:
-            if os.path.exists(cache_file):
+            if cache_file.exists():
                 try:
                     with open(cache_file, 'r') as f:
                         term_names = json.load(f)
@@ -230,8 +324,8 @@ def get_disease_enrichment(mondo_id):
 
         # Add hierarchy if requested
         if include_hierarchy and enrichment_terms:
-            go_terms = [term['go_id'] for term in enrichment_terms]
-            hierarchy = api.get_hierarchy_subgraph(go_terms)
+            term_ids = [term['term_id'] for term in enrichment_terms]
+            hierarchy = api.get_hierarchy_subgraph(term_ids)
             result['hierarchy'] = hierarchy
 
         return jsonify(result)
@@ -267,15 +361,15 @@ def search_diseases():
 
 @app.route('/api/hierarchy')
 def get_hierarchy():
-    """Get hierarchy for specific GO terms"""
+    """Get hierarchy for specific terms"""
     try:
-        go_terms = request.args.get('terms', '').split(',')
-        go_terms = [term.strip() for term in go_terms if term.strip()]
+        term_ids = request.args.get('terms', '').split(',')
+        term_ids = [term.strip() for term in term_ids if term.strip()]
 
-        if not go_terms:
+        if not term_ids:
             return jsonify({'error': 'Terms parameter is required'}), 400
 
-        hierarchy = api.get_hierarchy_subgraph(go_terms)
+        hierarchy = api.get_hierarchy_subgraph(term_ids)
 
         return jsonify(hierarchy)
 
@@ -287,7 +381,7 @@ def get_hierarchy():
 def get_stats():
     """Get database statistics"""
     try:
-        with open('data/database_stats.json', 'r') as f:
+        with open(STATS_PATH, 'r') as f:
             stats = json.load(f)
         return jsonify(stats)
     except Exception as e:

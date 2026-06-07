@@ -1,3 +1,10 @@
+[run]
+id = "translator-ci-latest"
+output_dir = "artifacts/runs/translator-ci-latest"
+
+[kgx]
+graph_dir = "data/kgx/translator_kg/latest"
+
 [translator_kgx]
 name = "translator_kg"
 release = "2026_04_22"
@@ -19,6 +26,7 @@ infores = "infores:answer-coalesce"
 
 [analysis]
 min_genes = 3
+delay = 0.1
 categories = [
     "biolink:BiologicalProcess",
     "biolink:MolecularActivity",

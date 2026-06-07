@@ -139,7 +139,7 @@
                     addResult(
                         'API Status',
                         true,
-                        `API is running! Database contains ${data.diseases?.toLocaleString()} diseases and ${data.go_terms?.toLocaleString()} GO terms.`,
+                        `API is running! Database contains ${data.diseases?.toLocaleString()} diseases and ${(data.terms || data.go_terms)?.toLocaleString()} terms.`,
                         data
                     );
                 } else {

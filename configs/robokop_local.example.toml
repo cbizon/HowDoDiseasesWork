@@ -1,0 +1,21 @@
+[run]
+id = "robokop-local"
+output_dir = "artifacts/runs/robokop-local"
+
+[kgx]
+# Directory containing nodes.jsonl and edges.jsonl from the KGX build that was
+# also used to build the AnswerCoalesce endpoint below.
+graph_dir = "/path/to/robokop/kgx"
+
+[answer_coalesce]
+# Replace with the /query endpoint built from the KGX above.
+query_url = "https://answercoalesce.renci.org/query"
+
+[analysis]
+min_genes = 3
+delay = 0.1
+categories = [
+    "biolink:BiologicalProcess",
+    "biolink:MolecularActivity",
+    "biolink:Pathway",
+]

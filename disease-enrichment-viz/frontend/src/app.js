@@ -205,7 +205,7 @@ class DiseaseEnrichmentViz {
 
     visualizeNetwork(data) {
         if (!data.hierarchy || data.hierarchy.terms.length === 0) {
-            this.showError('No hierarchy data available for visualization');
+            this.showError('No enrichment terms available for visualization');
             return;
         }
 

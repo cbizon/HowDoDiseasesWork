@@ -47,19 +47,35 @@ Download and extract the latest Translator KGX archive:
 uv run python scripts/download_translator_kgx.py --extract
 ```
 
-Build disease-gene mappings from the extracted graph:
+The preferred entry point is the config-driven wrapper:
+
+```bash
+uv run python run_pipeline.py --config configs/translator_ci_latest.toml --stage manifest
+uv run python run_pipeline.py --config configs/translator_ci_latest.toml --stage ingest
+uv run python run_pipeline.py --config configs/translator_ci_latest.toml --stage enrich
+uv run python run_pipeline.py --config configs/translator_ci_latest.toml --stage ground-truth
+uv run python run_pipeline.py --config configs/translator_ci_latest.toml --stage term-hierarchy
+uv run python run_pipeline.py --config configs/translator_ci_latest.toml --stage tsv
+uv run python run_pipeline.py --config configs/translator_ci_latest.toml --stage evaluate
+uv run python run_pipeline.py --config configs/translator_ci_latest.toml --stage db
+```
+
+The wrapper writes outputs under the `run.output_dir` configured in
+`configs/translator_ci_latest.toml`.
+
+Equivalent direct command for disease-gene extraction:
 
 ```bash
 uv run python ingest_robokop_data.py \
   --graph-dir data/kgx/translator_kg/latest \
-  --output-file artifacts/runs/translator-ci-YYYY-MM-DD/translator_disease_genes.json
+  --output-file artifacts/runs/translator-ci-YYYY-MM-DD/disease_genes.json
 ```
 
-Run enrichment through CI AnswerCoalesce:
+Equivalent direct command for enrichment through CI AnswerCoalesce:
 
 ```bash
 uv run python fast_disease_enrichment_analysis.py \
-  --data-file artifacts/runs/translator-ci-YYYY-MM-DD/translator_disease_genes.json \
+  --data-file artifacts/runs/translator-ci-YYYY-MM-DD/disease_genes.json \
   --results-file artifacts/runs/translator-ci-YYYY-MM-DD/enrichment_results.jsonl \
   --answer-coalesce-url https://answer-coalesce.ci.transltr.io/query \
   --min-genes 3
@@ -70,7 +86,7 @@ Extract disease-term ground truth from the same Translator KGX graph:
 ```bash
 uv run python extract_robokop_disease_term_edges.py \
   --graph-dir data/kgx/translator_kg/latest \
-  --output-prefix artifacts/runs/translator-ci-YYYY-MM-DD/translator_disease_term_edges
+  --output-prefix artifacts/runs/translator-ci-YYYY-MM-DD/disease_term_edges
 ```
 
 The ground-truth extractor streams JSONL/TSV outputs so it does not have to
@@ -82,7 +98,25 @@ Evaluate:
 ```bash
 uv run python compare_enrichment_vs_robokop.py \
   --enrichment artifacts/runs/translator-ci-YYYY-MM-DD/enrichment_results.jsonl \
-  --ground-truth artifacts/runs/translator-ci-YYYY-MM-DD/translator_disease_term_edges.jsonl \
+  --ground-truth artifacts/runs/translator-ci-YYYY-MM-DD/disease_term_edges.jsonl \
   --max-k 100 \
   --output-plot artifacts/runs/translator-ci-YYYY-MM-DD/enrichment_hits_at_k.png
+```
+
+Extract generic term hierarchy where KGX provides subclass edges:
+
+```bash
+uv run python extract_term_hierarchy.py \
+  --graph-dir data/kgx/translator_kg/latest \
+  --output artifacts/runs/translator-ci-YYYY-MM-DD/term_hierarchy.json
+```
+
+Build the visualization database:
+
+```bash
+uv run python disease-enrichment-viz/backend/data_prep/prepare_enrichment_database.py \
+  --term-hierarchy-file artifacts/runs/translator-ci-YYYY-MM-DD/term_hierarchy.json \
+  --enrichment-file artifacts/runs/translator-ci-YYYY-MM-DD/enrichment_results.jsonl \
+  --db-path artifacts/runs/translator-ci-YYYY-MM-DD/enrichment_database.db \
+  --stats-path artifacts/runs/translator-ci-YYYY-MM-DD/database_stats.json
 ```
