@@ -42,6 +42,11 @@ class DiseaseEnrichmentViz {
 
         // Parameter changes
         document.getElementById('pThreshold').addEventListener('change', async () => {
+            const currentSearch = searchInput.value.trim();
+            if (!this.currentDisease && currentSearch.length >= 2) {
+                this.searchDiseases(currentSearch);
+            }
+
             if (this.currentDisease) {
                 const hasAvailableCategory = await this.refreshCategoryOptions();
                 if (hasAvailableCategory) {
@@ -111,7 +116,14 @@ class DiseaseEnrichmentViz {
         }
 
         try {
-            const response = await fetch(`${this.apiBase}/search?q=${encodeURIComponent(query)}`);
+            const params = new URLSearchParams({ q: query });
+            try {
+                params.set('p_threshold', String(this.getPThreshold()));
+            } catch (error) {
+                // Let the backend use its default threshold while the user edits the field.
+            }
+
+            const response = await fetch(`${this.apiBase}/search?${params.toString()}`);
             const data = await response.json();
 
             this.displaySearchResults(data.results);
@@ -130,14 +142,54 @@ class DiseaseEnrichmentViz {
         }
 
         const html = results.map(disease => `
-            <div class=\"border rounded p-2 mb-2 cursor-pointer\"
-                 onclick=\"app.selectDisease('${disease.mondo_id}', '${disease.name}')\">
-                <strong>${disease.mondo_id}</strong><br>
-                <small>${disease.name} (${disease.gene_count} genes)</small>
+            <div class="border rounded p-2 mb-2 search-result ${this.canSelectDisease(disease) ? '' : 'disabled'}"
+                 data-mondo-id="${this.escapeHtml(disease.mondo_id)}"
+                 data-disease-name="${this.escapeHtml(disease.name)}"
+                 title="${this.canSelectDisease(disease) ? '' : 'No enrichment terms at the current p-value threshold'}">
+                <strong>${this.escapeHtml(disease.mondo_id)}</strong><br>
+                <small>${this.escapeHtml(disease.name)} (${disease.gene_count} genes)</small>
+                ${this.renderSearchCategoryCounts(disease.enrichment_counts)}
             </div>
         `).join('');
 
         container.innerHTML = html;
+        container.querySelectorAll('.search-result').forEach(element => {
+            element.addEventListener('click', () => {
+                if (element.classList.contains('disabled')) {
+                    return;
+                }
+                this.selectDisease(element.dataset.mondoId, element.dataset.diseaseName);
+            });
+        });
+    }
+
+    canSelectDisease(disease) {
+        return (disease.total_enrichment_terms || 0) > 0;
+    }
+
+    renderSearchCategoryCounts(counts = {}) {
+        const labels = {
+            BiologicalProcess: 'BP',
+            MolecularActivity: 'MA',
+            Pathway: 'Path'
+        };
+
+        const chips = this.categories.map(category => {
+            const count = counts[category.value] || 0;
+            const zeroClass = count === 0 ? ' zero' : '';
+            return `<span class="category-count${zeroClass}">${labels[category.value]} ${count}</span>`;
+        }).join('');
+
+        return `<div class="category-counts">${chips}</div>`;
+    }
+
+    escapeHtml(value) {
+        return String(value ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
     }
 
     selectDisease(mondoId, name) {

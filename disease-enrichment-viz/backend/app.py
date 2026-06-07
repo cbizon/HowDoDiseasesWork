@@ -24,6 +24,7 @@ STATS_PATH = os.environ.get(
     "ENRICHMENT_DATABASE_STATS_PATH",
     str(APP_DIR / "data" / "database_stats.json"),
 )
+CATEGORIES = ["BiologicalProcess", "MolecularActivity", "Pathway"]
 
 class EnrichmentAPI:
     def __init__(self, db_path=DATABASE_PATH):
@@ -231,6 +232,37 @@ class EnrichmentAPI:
 
         return [dict(row) for row in results]
 
+    def get_enrichment_counts_for_diseases(self, disease_ids, p_threshold):
+        if not disease_ids:
+            return {}
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        id_column = "disease_id" if self.schema == "generic" else "mondo_id"
+        placeholders = ",".join("?" for _ in disease_ids)
+
+        cursor.execute(
+            f"""
+            SELECT {id_column} AS disease_id, category, COUNT(*) AS count
+            FROM enrichment_results
+            WHERE {id_column} IN ({placeholders})
+            AND p_value <= ?
+            GROUP BY {id_column}, category
+            """,
+            [*disease_ids, p_threshold],
+        )
+
+        counts = {
+            disease_id: {category: 0 for category in CATEGORIES}
+            for disease_id in disease_ids
+        }
+        for row in cursor.fetchall():
+            if row["category"] in CATEGORIES:
+                counts[row["disease_id"]][row["category"]] = row["count"]
+
+        conn.close()
+        return counts
+
     def load_term_names_cache(self):
         """Load term names from cache file"""
         cache_files = [
@@ -340,6 +372,7 @@ def search_diseases():
     try:
         query = request.args.get('q', '').strip()
         limit = int(request.args.get('limit', 20))
+        p_threshold = float(request.args.get('p_threshold', 1e-5))
 
         if not query:
             return jsonify({'error': 'Query parameter q is required'}), 400
@@ -348,9 +381,19 @@ def search_diseases():
             return jsonify({'error': 'Query must be at least 2 characters'}), 400
 
         results = api.search_diseases(query, limit)
+        count_map = api.get_enrichment_counts_for_diseases(
+            [result["mondo_id"] for result in results],
+            p_threshold,
+        )
+
+        for result in results:
+            counts = count_map.get(result["mondo_id"], {category: 0 for category in CATEGORIES})
+            result["enrichment_counts"] = counts
+            result["total_enrichment_terms"] = sum(counts.values())
 
         return jsonify({
             'query': query,
+            'p_threshold': p_threshold,
             'results': results,
             'count': len(results)
         })
