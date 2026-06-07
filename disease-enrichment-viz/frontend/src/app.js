@@ -10,6 +10,7 @@ class DiseaseEnrichmentViz {
         this.height = 600;
 
         this.simulation = null;
+        this.activeRequestId = 0;
 
         this.initializeEventListeners();
         this.setupVisualization();
@@ -142,6 +143,7 @@ class DiseaseEnrichmentViz {
     async loadEnrichmentData() {
         if (!this.currentDisease) return;
 
+        const requestId = ++this.activeRequestId;
         const pThresholdText = document.getElementById('pThreshold').value;
         const category = document.getElementById('category').value;
 
@@ -159,6 +161,7 @@ class DiseaseEnrichmentViz {
 
         this.showLoading(true);
         this.hideError();
+        this.clearVisualization();
 
         try {
             const url = `${this.apiBase}/disease/${this.currentDisease.mondo_id}/enrichment?p_threshold=${pThreshold}&category=${category}&include_hierarchy=true`;
@@ -166,6 +169,11 @@ class DiseaseEnrichmentViz {
 
             const response = await fetch(url);
             const data = await response.json();
+
+            if (requestId !== this.activeRequestId) {
+                console.log('Ignoring stale enrichment response:', url);
+                return;
+            }
 
             if (response.ok) {
                 this.currentData = data;
@@ -176,10 +184,13 @@ class DiseaseEnrichmentViz {
                 this.showError(data.error || 'Failed to load enrichment data');
             }
         } catch (error) {
+            if (requestId !== this.activeRequestId) return;
             console.error('Load error:', error);
             this.showError('Failed to load data. Please check if the server is running.');
         } finally {
-            this.showLoading(false);
+            if (requestId === this.activeRequestId) {
+                this.showLoading(false);
+            }
         }
     }
 
@@ -224,14 +235,16 @@ class DiseaseEnrichmentViz {
 
     visualizeNetwork(data) {
         if (!data.hierarchy || data.hierarchy.terms.length === 0) {
-            this.showError('No enrichment terms available for visualization');
+            this.clearVisualization();
+            this.showError(
+                `No ${data.parameters?.category || ''} enrichment terms found at p <= ${data.parameters?.p_threshold || ''}`
+            );
             return;
         }
 
         console.log('Visualizing network:', data.hierarchy);
 
-        // Clear previous visualization
-        this.svg.select('.zoom-group').selectAll('*').remove();
+        this.clearVisualization();
 
         // Prepare data
         const nodes = this.prepareNodes(data);
@@ -244,6 +257,17 @@ class DiseaseEnrichmentViz {
 
         // Create force-directed layout
         this.createForceLayout(nodes, links);
+    }
+
+    clearVisualization() {
+        if (this.simulation) {
+            this.simulation.stop();
+            this.simulation = null;
+        }
+
+        if (this.svg) {
+            this.svg.select('.zoom-group').selectAll('*').remove();
+        }
     }
 
     prepareNodes(data) {
